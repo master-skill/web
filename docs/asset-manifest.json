@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/ashank53/web/static/css/main.f855e6bc.css",
+    "main.js": "/ashank53/web/static/js/main.50a43424.js",
+    "index.html": "/ashank53/web/index.html",
+    "main.f855e6bc.css.map": "/ashank53/web/static/css/main.f855e6bc.css.map",
+    "main.50a43424.js.map": "/ashank53/web/static/js/main.50a43424.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.f855e6bc.css",
+    "static/js/main.50a43424.js"
+  ]
+}
