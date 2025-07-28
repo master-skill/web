@@ -1,25 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { auth, db } from './firebase';
-import {
-  onAuthStateChanged,
-  signInWithPopup,
-  GoogleAuthProvider,
-  signOut,
-} from 'firebase/auth';
-import {
-  doc,
-  getDoc,
-  setDoc,
-  updateDoc,
-  arrayUnion,
-  onSnapshot,
-} from 'firebase/firestore';
+import { signInAnonymously, signInWithCustomToken, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc, arrayUnion, onSnapshot } from 'firebase/firestore';
+import { app, auth, db, googleProvider } from './firebase';
 
+// Define the quiz questions
 const quiz = [
   {
     question: "What is the capital of India?",
     options: ["Mumbai", "Delhi", "Kolkata", "Hyderabad"],
-    answer: 1,
+    answer: 1, // Index of the correct answer
   },
   {
     question: "Which planet is known as the Red Planet?",
@@ -33,36 +22,145 @@ const quiz = [
   },
 ];
 
+// MessageModal component to replace alert()
+const MessageModal = ({ message, type, onClose }) => {
+  if (!message) return null;
+
+  const bgColor = type === 'success' ? 'bg-green-100 border-green-400 text-green-700' :
+                  type === 'error' ? 'bg-red-100 border-red-400 text-red-700' :
+                  'bg-blue-100 border-blue-400 text-blue-700';
+  const borderColor = type === 'success' ? 'border-green-500' :
+                      type === 'error' ? 'border-red-500' :
+                      'border-blue-500';
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className={`relative p-6 rounded-lg shadow-xl max-w-sm w-full border-t-4 ${borderColor} ${bgColor}`}>
+        <p className="text-center font-semibold text-lg mb-4">{message}</p>
+        <button
+          onClick={onClose}
+          className="w-full bg-indigo-600 text-white py-2 rounded-md hover:bg-indigo-700 transition duration-200"
+        >
+          OK
+        </button>
+      </div>
+    </div>
+  );
+};
+
 function App() {
-  const [user, setUser] = useState(null);
+  // State variables for Firebase and user data
+  const [app, setApp] = useState(null);
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState(null); // Stores the current user's ID
+  const [user, setUser] = useState(null); // Stores the current user object
+  const [isAuthReady, setIsAuthReady] = useState(false); // Tracks if Firebase Auth is initialized
+
+  // State variables for application logic
   const [tokens, setTokens] = useState(0);
   const [quizStarted, setQuizStarted] = useState(false);
   const [quizIndex, setQuizIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState(null);
   const [quizCompleted, setQuizCompleted] = useState(false);
-  const [hasEarnedToken, setHasEarnedToken] = useState(false);
-  const [draws, setDraws] = useState([]);
+  const [hasEarnedToken, setHasEarnedToken] = useState(false); // Prevents earning multiple tokens from one quiz session
+  const [draws, setDraws] = useState([]); // Stores available lucky draws
+  const [message, setMessage] = useState(''); // For custom message modal
+  const [messageType, setMessageType] = useState('info'); // Type of message (success, error, info)
 
+  // Initialize Firebase and set up authentication listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-        const userRef = doc(db, "users", currentUser.uid);
-        const userSnap = await getDoc(userRef);
-        if (userSnap.exists()) {
-          setTokens(userSnap.data().tokens || 0);
-        } else {
-          await setDoc(userRef, { tokens: 0, enteredDraws: [] });
+    try {
+      // Use the Firebase app instance from firebase.js
+      setApp(app);
+      
+      // Get Firestore and Auth instances from firebase.js
+      const firestoreDb = db;
+      setDb(firestoreDb);
+      const firebaseAuth = auth;
+      setAuth(firebaseAuth);
+
+      // Sign in with custom token or anonymously
+      const signInUser = async () => {
+        try {
+          // If you need to use a custom token, you can still pass it via environment variables
+          const initialAuthToken = process.env.REACT_APP_INITIAL_AUTH_TOKEN || null;
+          if (initialAuthToken) {
+            await signInWithCustomToken(firebaseAuth, initialAuthToken);
+          } else {
+            await signInAnonymously(firebaseAuth);
+          }
+        } catch (error) {
+          console.error("Authentication error:", error);
+          setMessage("Failed to sign in. Please try again.");
+          setMessageType("error");
+        } finally {
+          setIsAuthReady(true); // Mark auth as ready regardless of success/failure
         }
-      } else {
-        setUser(null);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
+      };
 
+      signInUser();
+
+      // Set up authentication state change listener
+      const unsubscribeAuth = onAuthStateChanged(firebaseAuth, async (currentUser) => {
+        if (currentUser) {
+          setUser(currentUser);
+          const currentUserId = currentUser.uid;
+          setUserId(currentUserId);
+
+          // Fetch user data from Firestore
+          if (firestoreDb) {
+            // Path for Canvas environment: artifacts/{appId}/users/{currentUserId}/user_data/profile
+            const userRef = doc(firestoreDb, `artifacts/default-app-id/users/${currentUserId}/user_data/profile`);
+            try {
+              const userSnap = await getDoc(userRef);
+              if (userSnap.exists()) {
+                setTokens(userSnap.data().tokens || 0);
+                // Reset quiz state if user logs in again
+                setQuizStarted(false);
+                setQuizIndex(0);
+                setSelectedOption(null);
+                setQuizCompleted(false);
+                setHasEarnedToken(false);
+              } else {
+                // Create new user profile if it doesn't exist
+                await setDoc(userRef, { tokens: 0, enteredDraws: [] });
+                setTokens(0);
+              }
+            } catch (error) {
+              console.error("Error fetching or setting user data:", error);
+              setMessage("Failed to load user data.");
+              setMessageType("error");
+            }
+          }
+        } else {
+          setUser(null);
+          setUserId(null);
+          setTokens(0);
+          setQuizStarted(false);
+          setQuizIndex(0);
+          setSelectedOption(null);
+          setQuizCompleted(false);
+          setHasEarnedToken(false);
+        }
+      });
+
+      // Cleanup function for auth listener
+      return () => unsubscribeAuth();
+    } catch (error) {
+      console.error("Error during Firebase initialization:", error);
+      setMessage("Failed to initialize the application. Check console for details.");
+      setMessageType("error");
+    }
+  }, []); // Empty dependency array means this effect runs once on mount
+
+  // Listen for real-time updates to available draws
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, "meta", "draws"), (docSnap) => {
+    if (!db || !isAuthReady) return; // Ensure db is initialized and auth is ready
+
+    const drawsRef = doc(db, `artifacts/default-app-id/public/data/meta/draws`);
+
+    const unsub = onSnapshot(drawsRef, (docSnap) => {
       try {
         if (docSnap.exists()) {
           const data = docSnap.data();
@@ -73,101 +171,230 @@ function App() {
           }
         } else {
           setDraws([]);
+          // Optionally, create a default draws list if it doesn't exist
+          // This is generally done via an admin SDK or a separate process,
+          // but for a simple demo, you could add it here for first-time setup.
+          // setDoc(drawsRef, { list: [{ id: 'draw1', prize: 'Gift Card', tokens: 5 }] }, { merge: true });
         }
       } catch (error) {
         console.error("Error processing draws data:", error);
         setDraws([]);
+        setMessage("Failed to load draws data.");
+        setMessageType("error");
       }
     }, (error) => {
       console.error("Error listening to draws:", error);
       setDraws([]);
+      setMessage("Error connecting to draws data.");
+      setMessageType("error");
     });
+
+    // Cleanup function for snapshot listener
     return () => unsub();
-  }, []);
+  }, [db, isAuthReady]); // Re-run if db or auth readiness changes
 
-  const signIn = async () => {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+  // Google Sign-in function
+  const signInWithGoogle = async () => {
+    if (!auth) {
+      console.error("Auth not initialized");
+      setMessage("Authentication service not available. Please try again later.");
+      setMessageType("error");
+      return;
+    }
+    
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      // The signed-in user info
+      const user = result.user;
+      
+      // Check if we need to create a new user document
+      const userRef = doc(db, `artifacts/default-app-id/users/${user.uid}/user_data/profile`);
+      const userDoc = await getDoc(userRef);
+      
+      if (!userDoc.exists()) {
+        // Create a new user document if it doesn't exist
+        await setDoc(userRef, {
+          displayName: user.displayName,
+          email: user.email,
+          photoURL: user.photoURL,
+          tokens: 0, // Initialize tokens
+          createdAt: new Date().toISOString()
+        });
+      }
+      
+      setMessage("Successfully signed in with Google!");
+      setMessageType("success");
+    } catch (error) {
+      console.error("Google Sign-in failed:", error);
+      
+      // Handle specific errors
+      const errorCode = error.code;
+      let userFriendlyMessage = "Google sign-in failed. Please try again.";
+      
+      if (errorCode === 'auth/account-exists-with-different-credential') {
+        userFriendlyMessage = "An account already exists with the same email but different sign-in credentials.";
+      } else if (errorCode === 'auth/popup-closed-by-user') {
+        userFriendlyMessage = "Sign in popup was closed before completing the sign-in process.";
+      } else if (errorCode === 'auth/cancelled-popup-request') {
+        userFriendlyMessage = "Only one popup request is allowed at a time.";
+      } else if (errorCode === 'auth/popup-blocked') {
+        userFriendlyMessage = "Popup was blocked by the browser. Please allow popups for this site and try again.";
+      }
+      
+      setMessage(userFriendlyMessage);
+      setMessageType("error");
+    }
   };
 
-  const logOut = () => {
-    signOut(auth);
+  // Logout function
+  const logOut = async () => {
+    if (!auth) return;
+    try {
+      await signOut(auth);
+      setMessage("Logged out successfully.");
+      setMessageType("success");
+    } catch (error) {
+      console.error("Logout failed:", error);
+      setMessage("Logout failed. Please try again.");
+      setMessageType("error");
+    }
   };
 
+  // Handle moving to the next quiz question or completing the quiz
   const handleNextQuestion = async () => {
     if (quizIndex < quiz.length - 1) {
       setQuizIndex(quizIndex + 1);
-      setSelectedOption(null);
+      setSelectedOption(null); // Reset selected option for next question
     } else {
       setQuizCompleted(true);
-      if (!hasEarnedToken && user) {
-        const userRef = doc(db, "users", user.uid);
-        await updateDoc(userRef, { tokens: tokens + 1 });
-        setTokens(tokens + 1);
-        setHasEarnedToken(true);
+      // Only award token if user hasn't earned one in this session and is logged in
+      if (!hasEarnedToken && user && db && userId) {
+        const userRef = doc(db, `artifacts/default-app-id/users/${userId}/user_data/profile`);
+        try {
+          await updateDoc(userRef, { tokens: tokens + 1 });
+          setTokens(prevTokens => prevTokens + 1); // Update local state
+          setHasEarnedToken(true); // Mark token as earned for this session
+          setMessage("🎉 You've earned 1 token!");
+          setMessageType("success");
+        } catch (error) {
+          console.error("Error updating tokens:", error);
+          setMessage("Failed to award token. Please try again.");
+          setMessageType("error");
+        }
       }
     }
   };
 
+  // Handle entering a lucky draw
   const handleEnterDraw = async (drawId, cost) => {
-    const userRef = doc(db, "users", user.uid);
-    const userSnap = await getDoc(userRef);
-    const enteredDraws = userSnap.data().enteredDraws || [];
-
-    if (enteredDraws.includes(drawId)) {
-      alert("🚫 Already entered this draw.");
+    if (!user || !db || !userId) {
+      setMessage("Please log in to enter draws.");
+      setMessageType("info");
       return;
     }
 
-    if (tokens >= cost) {
-      await updateDoc(userRef, {
-        tokens: tokens - cost,
-        enteredDraws: arrayUnion(drawId)
-      });
-      setTokens(tokens - cost);
-      alert("✅ Entered into the draw!");
-    } else {
-      alert("❌ Not enough tokens!");
+    const userRef = doc(db, `artifacts/default-app-id/users/${userId}/user_data/profile`);
+
+    try {
+      const userSnap = await getDoc(userRef);
+      if (!userSnap.exists()) {
+        setMessage("User data not found. Please try logging in again.");
+        setMessageType("error");
+        return;
+      }
+
+      const enteredDraws = userSnap.data().enteredDraws || [];
+
+      if (enteredDraws.includes(drawId)) {
+        setMessage("🚫 You have already entered this draw.");
+        setMessageType("info");
+        return;
+      }
+
+      if (tokens >= cost) {
+        await updateDoc(userRef, {
+          tokens: tokens - cost,
+          enteredDraws: arrayUnion(drawId) // Add drawId to the array
+        });
+        setTokens(prevTokens => prevTokens - cost); // Update local state
+        setMessage("✅ Successfully entered the draw!");
+        setMessageType("success");
+      } else {
+        setMessage("❌ Not enough tokens! Complete the quiz to earn more.");
+        setMessageType("error");
+      }
+    } catch (error) {
+      console.error("Error entering draw:", error);
+      setMessage("Failed to enter draw. Please try again.");
+      setMessageType("error");
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-100 to-slate-200 p-6">
-      <div className="max-w-3xl mx-auto bg-white shadow-lg rounded-xl p-6 space-y-6">
-        <h1 className="text-3xl font-bold text-center text-indigo-600">🎯 Lucky Draw Platform</h1>
+    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-100 p-4 sm:p-6 font-inter antialiased">
+      {/* Custom Message Modal */}
+      <MessageModal message={message} type={messageType} onClose={() => setMessage('')} />
 
+      {/* Google Fonts - Inter */}
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+
+      <div className="max-w-4xl mx-auto bg-white shadow-2xl rounded-3xl p-6 sm:p-8 space-y-8 border border-indigo-100 transform transition-all duration-300 hover:scale-[1.01]">
+        <h1 className="text-4xl sm:text-5xl font-extrabold text-center text-indigo-800 tracking-tight leading-tight">
+          <span role="img" aria-label="Target">🎯</span> Lucky Draw Platform
+        </h1>
+
+        {/* User Authentication Section */}
         {user ? (
-          <div className="flex justify-between items-center flex-wrap gap-3">
-            <div>
-              <p className="text-gray-700 font-medium">👤 {user.displayName}</p>
-              <p className="text-green-600 font-semibold">🎫 Tokens: {tokens}</p>
+          <div className="flex flex-col sm:flex-row justify-between items-center flex-wrap gap-4 p-5 bg-indigo-50 rounded-2xl shadow-inner border border-indigo-200">
+            <div className="text-center sm:text-left">
+              <p className="text-gray-800 font-semibold text-xl flex items-center justify-center sm:justify-start gap-2">
+                <span role="img" aria-label="User">👤</span> {user.displayName || 'Guest User'}
+              </p>
+              <p className="text-green-700 font-bold text-2xl mt-2 flex items-center justify-center sm:justify-start gap-2">
+                <span role="img" aria-label="Ticket">🎫</span> Tokens: {tokens}
+              </p>
+              {userId && <p className="text-gray-500 text-sm mt-1 break-all">User ID: {userId}</p>}
             </div>
             <button
               onClick={logOut}
-              className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+              className="bg-red-600 text-white px-7 py-3 rounded-xl shadow-lg hover:bg-red-700 transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-red-300 font-bold text-lg"
             >
               Logout
             </button>
           </div>
         ) : (
-          <div className="text-center">
+          <div className="text-center p-6 bg-gray-50 rounded-2xl shadow-md border border-gray-200">
+            <p className="text-gray-700 mb-5 text-xl font-medium">Sign in to earn tokens and enter exciting draws!</p>
             <button
-              onClick={signIn}
-              className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700"
+              onClick={signInWithGoogle}
+              className="bg-blue-600 text-white px-10 py-4 rounded-xl shadow-lg hover:bg-blue-700 transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-300 font-bold text-xl flex items-center justify-center mx-auto gap-3"
             >
+              <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12.24 10.285V11.7h2.76A6.9 6.9 0 0 1 12 14.2c-3.14 0-5.7-2.56-5.7-5.7s2.56-5.7 5.7-5.7c1.7 0 3.16.6 4.3 1.6l2.16-2.16C16.5 2.14 14.4 1 12 1 6.48 1 2 5.48 2 11s4.48 10 10 10c5.52 0 10-4.48 10-10 0-.68-.08-1.35-.2-2H12.24z"/>
+              </svg>
               Login with Google
             </button>
           </div>
         )}
 
+        {/* Quiz Section (Visible only if user is logged in) */}
         {user && (
           <>
             {!quizStarted && !quizCompleted && (
-              <div className="text-center">
-                <h2 className="text-xl font-semibold text-gray-800">🔥 Today's Quiz - Earn 1 Token</h2>
+              <div className="text-center p-7 bg-yellow-50 rounded-2xl shadow-lg border border-yellow-200 animate-fade-in">
+                <h2 className="text-3xl font-bold text-gray-800 mb-4 flex items-center justify-center gap-3">
+                  <span role="img" aria-label="Fire">🔥</span> Today's Quiz - Earn 1 Token
+                </h2>
+                <p className="text-gray-700 mb-6 text-lg">Answer 3 simple questions correctly to get a free token!</p>
                 <button
-                  onClick={() => setQuizStarted(true)}
-                  className="mt-3 bg-yellow-500 text-white px-6 py-2 rounded hover:bg-yellow-600"
+                  onClick={() => {
+                    setQuizStarted(true);
+                    setQuizCompleted(false); // Allow re-taking quiz after completion
+                    setQuizIndex(0);
+                    setSelectedOption(null);
+                    setHasEarnedToken(false); // Reset token earned status for new quiz session
+                  }}
+                  className="bg-yellow-500 text-white px-8 py-3.5 rounded-xl shadow-lg hover:bg-yellow-600 transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-yellow-300 font-bold text-xl"
                 >
                   Start Quiz
                 </button>
@@ -175,17 +402,19 @@ function App() {
             )}
 
             {quizStarted && !quizCompleted && (
-              <div>
-                <h3 className="text-lg font-medium mb-4">{quiz[quizIndex].question}</h3>
-                <div className="space-y-2">
+              <div className="p-7 bg-blue-50 rounded-2xl shadow-lg border border-blue-200 animate-fade-in">
+                <h3 className="text-2xl font-semibold mb-6 text-gray-800">
+                  Question {quizIndex + 1} of {quiz.length}: {quiz[quizIndex].question}
+                </h3>
+                <div className="space-y-4">
                   {quiz[quizIndex].options.map((opt, idx) => (
                     <button
                       key={idx}
-                      className={`w-full px-4 py-2 rounded border text-left ${
-                        selectedOption === idx
-                          ? "bg-blue-200 border-blue-400"
-                          : "bg-white border-gray-300 hover:bg-gray-100"
-                      }`}
+                      className={`w-full px-6 py-3 rounded-xl border text-left text-lg font-medium transition duration-200 ease-in-out
+                        ${selectedOption === idx
+                          ? "bg-blue-300 border-blue-500 text-blue-900 shadow-inner"
+                          : "bg-white border-gray-300 text-gray-800 hover:bg-gray-100 hover:border-gray-400 shadow-sm"
+                        } focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-50`}
                       onClick={() => setSelectedOption(idx)}
                     >
                       {opt}
@@ -195,35 +424,62 @@ function App() {
                 <button
                   disabled={selectedOption === null}
                   onClick={handleNextQuestion}
-                  className="mt-4 bg-green-600 text-white px-5 py-2 rounded disabled:bg-gray-300"
+                  className="mt-8 w-full bg-green-600 text-white px-7 py-3.5 rounded-xl shadow-lg disabled:bg-gray-300 disabled:cursor-not-allowed hover:bg-green-700 transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-green-300 font-bold text-xl"
                 >
-                  Next
+                  {quizIndex < quiz.length - 1 ? 'Next Question' : 'Finish Quiz'}
                 </button>
               </div>
             )}
 
             {quizCompleted && (
-              <p className="text-green-700 font-semibold text-center">🎉 You've earned 1 token!</p>
+              <div className="text-center p-7 bg-green-50 rounded-2xl shadow-lg border border-green-200 animate-fade-in">
+                <p className="text-green-700 font-bold text-3xl mb-4">
+                  {hasEarnedToken ? "🎉 You've successfully earned 1 token!" : "You've completed the quiz!"}
+                </p>
+                <button
+                  onClick={() => {
+                    setQuizStarted(false);
+                    setQuizCompleted(false);
+                    setQuizIndex(0);
+                    setSelectedOption(null);
+                    setHasEarnedToken(false);
+                  }}
+                  className="bg-indigo-600 text-white px-7 py-3 rounded-xl shadow-lg hover:bg-indigo-700 transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-indigo-300 font-bold text-lg"
+                >
+                  Go Back to Main
+                </button>
+              </div>
             )}
 
-            <h2 className="text-xl font-bold mt-6 text-gray-800">🎁 Available Draws</h2>
-            <div className="grid gap-4 md:grid-cols-2">
-              {draws.map((draw) => (
-                <div
-                  key={draw.id}
-                  className="border border-gray-200 p-4 rounded-lg shadow hover:shadow-md transition"
-                >
-                  <p className="text-lg font-semibold text-indigo-700">🎁 {draw.prize}</p>
-                  <p className="text-gray-600">Cost: {draw.tokens} Token(s)</p>
-                  <button
-                    onClick={() => handleEnterDraw(draw.id, draw.tokens)}
-                    className="mt-3 bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700"
+            {/* Available Draws Section */}
+            <h2 className="text-3xl font-bold mt-10 text-gray-800 text-center flex items-center justify-center gap-3">
+              <span role="img" aria-label="Gift">🎁</span> Available Draws
+            </h2>
+            {draws.length === 0 ? (
+              <p className="text-center text-gray-600 italic text-lg mt-4">No draws available at the moment. Check back later!</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
+                {draws.map((draw) => (
+                  <div
+                    key={draw.id}
+                    className="border border-purple-200 p-6 rounded-2xl shadow-xl hover:shadow-2xl transition duration-300 ease-in-out bg-white flex flex-col justify-between transform hover:-translate-y-1 hover:scale-105"
                   >
-                    Enter Draw
-                  </button>
-                </div>
-              ))}
-            </div>
+                    <div>
+                      <p className="text-2xl font-bold text-purple-700 mb-3 flex items-center gap-2">
+                        <span role="img" aria-label="Prize">🏆</span> {draw.prize}
+                      </p>
+                      <p className="text-gray-700 text-lg">Cost: <span className="font-extrabold text-purple-800">{draw.tokens} Token(s)</span></p>
+                    </div>
+                    <button
+                      onClick={() => handleEnterDraw(draw.id, draw.tokens)}
+                      className="mt-5 w-full bg-purple-600 text-white px-6 py-3 rounded-xl shadow-lg hover:bg-purple-700 transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-purple-300 font-bold text-lg"
+                    >
+                      Enter Draw
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>

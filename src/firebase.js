@@ -1,6 +1,6 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 // Your web app's Firebase configuration
@@ -16,27 +16,20 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-let app;
-let auth;
-let db;
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const googleProvider = new GoogleAuthProvider();
 
-try {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-  
-  if (window.location.hostname === 'localhost') {
-    console.log('Firebase initialized in development mode');
-  } else {
-    console.log('Firebase initialized in production mode');
-  }
-} catch (error) {
-  console.error('Firebase initialization error:', error);
-  // Handle the error appropriately for your app
-  if (!app) {
-    // Fallback or show error UI
-    console.error('Failed to initialize Firebase');
-  }
+// Optional: Add any additional provider configuration
+googleProvider.setCustomParameters({
+  prompt: 'select_account'  // Forces account selection even for one account
+});
+
+if (window.location.hostname === 'localhost') {
+  console.log('Firebase initialized in development mode');
+} else {
+  console.log('Firebase initialized in production mode');
 }
 
-export { auth, db };
+export { app, auth, db, googleProvider, GoogleAuthProvider };
