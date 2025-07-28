@@ -63,6 +63,14 @@ function App() {
   const [message, setMessage] = useState(''); // For custom message modal
   const [messageType, setMessageType] = useState('info'); // Type of message (success, error, info)
 
+  useEffect(() => {
+    console.log("Firebase initialized:", {
+      db: !!db,
+      auth: !!auth,
+      isAuthReady
+    });
+  }, [db, auth, isAuthReady]);
+
   // Initialize Firebase and set up authentication listener
   useEffect(() => {
     // Set up auth state listener
@@ -233,42 +241,47 @@ function App() {
 
   // Listen for real-time updates to available draws
   useEffect(() => {
-    if (!db || !isAuthReady) return; // Ensure db is initialized and auth is ready
+    if (!db || !isAuthReady) {
+      console.log("DB not ready or auth not ready");
+      return;
+    }
 
-    const drawsRef = doc(db, `artifacts/default-app-id/public/data/meta/draws`);
-
-    const unsub = onSnapshot(drawsRef, (docSnap) => {
-      try {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data && Array.isArray(data.list)) {
-            setDraws(data.list);
+    console.log("Fetching draws...");
+    const drawsRef = doc(db, 'meta', 'draws');
+    
+    const unsub = onSnapshot(drawsRef, 
+      (docSnap) => {
+        try {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            console.log("Draws data received:", data);
+            if (data && Array.isArray(data.list)) {
+              setDraws(data.list);
+            } else {
+              console.warn("Draws data is not in expected format");
+              setDraws([]);
+            }
           } else {
+            console.warn("Draws document not found");
             setDraws([]);
           }
-        } else {
+        } catch (error) {
+          console.error("Error processing draws data:", error);
           setDraws([]);
-          // Optionally, create a default draws list if it doesn't exist
-          // This is generally done via an admin SDK or a separate process,
-          // but for a simple demo, you could add it here for first-time setup.
-          // setDoc(drawsRef, { list: [{ id: 'draw1', prize: 'Gift Card', tokens: 5 }] }, { merge: true });
         }
-      } catch (error) {
-        console.error("Error processing draws data:", error);
+      },
+      (error) => {
+        console.error("Error listening to draws:", {
+          code: error.code,
+          message: error.message,
+          details: error
+        });
         setDraws([]);
-        setMessage("Failed to load draws data.");
-        setMessageType("error");
       }
-    }, (error) => {
-      console.error("Error listening to draws:", error);
-      setDraws([]);
-      setMessage("Error connecting to draws data.");
-      setMessageType("error");
-    });
+    );
 
-    // Cleanup function for snapshot listener
     return () => unsub();
-  }, [db, isAuthReady]); // Re-run if db or auth readiness changes
+  }, [db, isAuthReady]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-100 p-4 sm:p-6 font-inter antialiased">
