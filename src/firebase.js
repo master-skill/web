@@ -4,7 +4,6 @@ import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 // Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyAzKY7ZlEwFgUzNFwgod8av6Ng7icJEDhM",
   authDomain: "click-solve-win.firebaseapp.com",
@@ -16,20 +15,36 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const googleProvider = new GoogleAuthProvider();
+let app;
+let auth;
+let db;
+let googleProvider;
 
-// Optional: Add any additional provider configuration
-googleProvider.setCustomParameters({
-  prompt: 'select_account'  // Forces account selection even for one account
-});
-
-if (window.location.hostname === 'localhost') {
-  console.log('Firebase initialized in development mode');
-} else {
-  console.log('Firebase initialized in production mode');
+try {
+  // Initialize Firebase
+  app = initializeApp(firebaseConfig);
+  
+  // Initialize Firebase services
+  auth = getAuth(app);
+  db = getFirestore(app);
+  googleProvider = new GoogleAuthProvider();
+  
+  // Optional: Add any additional provider configuration
+  googleProvider.setCustomParameters({
+    prompt: 'select_account'  // Forces account selection even for one account
+  });
+  
+  if (window.location.hostname === 'localhost') {
+    console.log('Firebase initialized in development mode');
+  } else {
+    console.log('Firebase initialized in production mode');
+  }
+  
+  console.log('Firebase initialized successfully');
+} catch (error) {
+  console.error('Firebase initialization error:', error);
+  // Re-throw the error to be handled by the application
+  throw error;
 }
 
 export { app, auth, db, googleProvider, GoogleAuthProvider };

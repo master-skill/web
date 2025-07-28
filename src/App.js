@@ -50,14 +50,9 @@ const MessageModal = ({ message, type, onClose }) => {
 
 function App() {
   // State variables for Firebase and user data
-  const [app, setApp] = useState(null);
-  const [db, setDb] = useState(null);
-  const [auth, setAuth] = useState(null);
-  const [userId, setUserId] = useState(null); // Stores the current user's ID
-  const [user, setUser] = useState(null); // Stores the current user object
-  const [isAuthReady, setIsAuthReady] = useState(false); // Tracks if Firebase Auth is initialized
-
-  // State variables for application logic
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [user, setUser] = useState(null);
+  const [userId, setUserId] = useState('');
   const [tokens, setTokens] = useState(0);
   const [quizStarted, setQuizStarted] = useState(false);
   const [quizIndex, setQuizIndex] = useState(0);
@@ -70,128 +65,49 @@ function App() {
 
   // Initialize Firebase and set up authentication listener
   useEffect(() => {
-    try {
-      // Use the Firebase app instance from firebase.js
-      setApp(app);
-      
-      // Get Firestore and Auth instances from firebase.js
-      const firestoreDb = db;
-      setDb(firestoreDb);
-      const firebaseAuth = auth;
-      setAuth(firebaseAuth);
-
-      // Sign in with custom token or anonymously
-      const signInUser = async () => {
-        try {
-          // If you need to use a custom token, you can still pass it via environment variables
-          const initialAuthToken = process.env.REACT_APP_INITIAL_AUTH_TOKEN || null;
-          if (initialAuthToken) {
-            await signInWithCustomToken(firebaseAuth, initialAuthToken);
-          } else {
-            await signInAnonymously(firebaseAuth);
-          }
-        } catch (error) {
-          console.error("Authentication error:", error);
-          setMessage("Failed to sign in. Please try again.");
-          setMessageType("error");
-        } finally {
-          setIsAuthReady(true); // Mark auth as ready regardless of success/failure
-        }
-      };
-
-      signInUser();
-
-      // Set up authentication state change listener
-      const unsubscribeAuth = onAuthStateChanged(firebaseAuth, async (currentUser) => {
+    // Set up auth state listener
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
         if (currentUser) {
           setUser(currentUser);
-          const currentUserId = currentUser.uid;
-          setUserId(currentUserId);
+          setUserId(currentUser.uid);
 
           // Fetch user data from Firestore
-          if (firestoreDb) {
-            // Path for Canvas environment: artifacts/{appId}/users/{currentUserId}/user_data/profile
-            const userRef = doc(firestoreDb, `artifacts/default-app-id/users/${currentUserId}/user_data/profile`);
+          if (db) {
+            const userRef = doc(db, `artifacts/default-app-id/users/${currentUser.uid}/user_data/profile`);
             try {
               const userSnap = await getDoc(userRef);
               if (userSnap.exists()) {
-                setTokens(userSnap.data().tokens || 0);
-                // Reset quiz state if user logs in again
-                setQuizStarted(false);
-                setQuizIndex(0);
-                setSelectedOption(null);
-                setQuizCompleted(false);
-                setHasEarnedToken(false);
+                const userData = userSnap.data();
+                setTokens(userData.tokens || 0);
               } else {
-                // Create new user profile if it doesn't exist
-                await setDoc(userRef, { tokens: 0, enteredDraws: [] });
-                setTokens(0);
+                // Create user document if it doesn't exist
+                await setDoc(userRef, {
+                  displayName: currentUser.displayName || 'Anonymous',
+                  email: currentUser.email || '',
+                  photoURL: currentUser.photoURL || '',
+                  tokens: 0,
+                  createdAt: new Date().toISOString()
+                });
               }
             } catch (error) {
-              console.error("Error fetching or setting user data:", error);
-              setMessage("Failed to load user data.");
-              setMessageType("error");
+              console.error("Error fetching user data:", error);
             }
           }
         } else {
           setUser(null);
-          setUserId(null);
-          setTokens(0);
-          setQuizStarted(false);
-          setQuizIndex(0);
-          setSelectedOption(null);
-          setQuizCompleted(false);
-          setHasEarnedToken(false);
-        }
-      });
-
-      // Cleanup function for auth listener
-      return () => unsubscribeAuth();
-    } catch (error) {
-      console.error("Error during Firebase initialization:", error);
-      setMessage("Failed to initialize the application. Check console for details.");
-      setMessageType("error");
-    }
-  }, []); // Empty dependency array means this effect runs once on mount
-
-  // Listen for real-time updates to available draws
-  useEffect(() => {
-    if (!db || !isAuthReady) return; // Ensure db is initialized and auth is ready
-
-    const drawsRef = doc(db, `artifacts/default-app-id/public/data/meta/draws`);
-
-    const unsub = onSnapshot(drawsRef, (docSnap) => {
-      try {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data && Array.isArray(data.list)) {
-            setDraws(data.list);
-          } else {
-            setDraws([]);
-          }
-        } else {
-          setDraws([]);
-          // Optionally, create a default draws list if it doesn't exist
-          // This is generally done via an admin SDK or a separate process,
-          // but for a simple demo, you could add it here for first-time setup.
-          // setDoc(drawsRef, { list: [{ id: 'draw1', prize: 'Gift Card', tokens: 5 }] }, { merge: true });
+          setUserId('');
         }
       } catch (error) {
-        console.error("Error processing draws data:", error);
-        setDraws([]);
-        setMessage("Failed to load draws data.");
-        setMessageType("error");
+        console.error("Auth state change error:", error);
+      } finally {
+        setIsAuthReady(true);
       }
-    }, (error) => {
-      console.error("Error listening to draws:", error);
-      setDraws([]);
-      setMessage("Error connecting to draws data.");
-      setMessageType("error");
     });
 
-    // Cleanup function for snapshot listener
-    return () => unsub();
-  }, [db, isAuthReady]); // Re-run if db or auth readiness changes
+    // Cleanup subscription on unmount
+    return () => unsubscribe();
+  }, [db]);
 
   // Google Sign-in function
   const signInWithGoogle = async () => {
@@ -204,24 +120,9 @@ function App() {
     
     try {
       const result = await signInWithPopup(auth, googleProvider);
-      // The signed-in user info
       const user = result.user;
       
-      // Check if we need to create a new user document
-      const userRef = doc(db, `artifacts/default-app-id/users/${user.uid}/user_data/profile`);
-      const userDoc = await getDoc(userRef);
-      
-      if (!userDoc.exists()) {
-        // Create a new user document if it doesn't exist
-        await setDoc(userRef, {
-          displayName: user.displayName,
-          email: user.email,
-          photoURL: user.photoURL,
-          tokens: 0, // Initialize tokens
-          createdAt: new Date().toISOString()
-        });
-      }
-      
+      // User is automatically handled by the auth state listener above
       setMessage("Successfully signed in with Google!");
       setMessageType("success");
     } catch (error) {
@@ -329,6 +230,45 @@ function App() {
       setMessageType("error");
     }
   };
+
+  // Listen for real-time updates to available draws
+  useEffect(() => {
+    if (!db || !isAuthReady) return; // Ensure db is initialized and auth is ready
+
+    const drawsRef = doc(db, `artifacts/default-app-id/public/data/meta/draws`);
+
+    const unsub = onSnapshot(drawsRef, (docSnap) => {
+      try {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data && Array.isArray(data.list)) {
+            setDraws(data.list);
+          } else {
+            setDraws([]);
+          }
+        } else {
+          setDraws([]);
+          // Optionally, create a default draws list if it doesn't exist
+          // This is generally done via an admin SDK or a separate process,
+          // but for a simple demo, you could add it here for first-time setup.
+          // setDoc(drawsRef, { list: [{ id: 'draw1', prize: 'Gift Card', tokens: 5 }] }, { merge: true });
+        }
+      } catch (error) {
+        console.error("Error processing draws data:", error);
+        setDraws([]);
+        setMessage("Failed to load draws data.");
+        setMessageType("error");
+      }
+    }, (error) => {
+      console.error("Error listening to draws:", error);
+      setDraws([]);
+      setMessage("Error connecting to draws data.");
+      setMessageType("error");
+    });
+
+    // Cleanup function for snapshot listener
+    return () => unsub();
+  }, [db, isAuthReady]); // Re-run if db or auth readiness changes
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-100 p-4 sm:p-6 font-inter antialiased">
